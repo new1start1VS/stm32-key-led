@@ -1,3 +1,9 @@
+# ---- STM32 标准外设库 / 启动文件 (ST 官方厂商代码, 不入库) ----
+# 这些是 ST 官方样板, 每个工程都一样; 本地保留以便 Keil 编译, 但不进仓库
+# 还原方法见 remain.md
+libraries/
+start/
+
 # ---- Keil uVision / STM32 编译产物 / 临时文件 ----
 Objects/
 Listings/
