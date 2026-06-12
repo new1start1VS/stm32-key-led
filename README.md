@@ -39,16 +39,25 @@
 | `keil_watch.py` | 后台监视器：检测到 Keil(`UV4.exe`)打开 → 自动弹出助手 |
 | `打开记录助手.bat` | 手动打开助手 |
 | `启动Keil监视器.bat` | 手动启动后台监视器 |
-| `config.json` | 项目路径 / GitHub 仓库地址配置 |
+| `config.json` | 项目路径 / GitHub 仓库地址 / AI 接口配置 |
 
 ### 记录助手能记什么
 
-- ① **main 函数改动 / 实验目标**
-- ② **新建或修改的 `.c` / `.h` 文件**（打开时自动扫描最近 7 天的改动并列出）
-- ③ **Excalidraw 笔记**（可扫描项目内 `.excalidraw` 文件）
-- 🚀 一键 **保存并上传到 GitHub**（自动 `git add / commit / push`）
+- ① **main 函数改动 / 实验目标**（🧩 可一键自动提取最近改动的 `main()` 函数体）
+- ② **新建或修改的 `.c` / `.h` 文件**（打开时自动扫描最近 7 天的改动，附 📊 代码量统计；已自动忽略标准外设库）
+- ③ **AI 总结**（🤖 把 main 函数 + 改动文件 + `git diff` 喂给 AI，自动生成中文开发总结，可手动编辑后再保存）
+- 🟢 **自动识别当前实验**（按最近改动的工程文件夹推断并显示在顶部）
+- 🚀 一键 **保存并上传到 GitHub**（自动 `git add / commit / push`；**没有改动时不会重复提交**，未变化的文件不增加冗余）
 
-所有记录追加保存到仓库根目录的 **`DEVLOG.md`**。
+所有记录追加保存到仓库根目录的 **`DEVLOG.md`**（排版好的 Markdown，main 函数以代码块呈现）。
+
+> **配置 AI（默认本地 Ollama，免费 / 离线 / 无需 Key）：**
+> 1. 安装 [Ollama](https://ollama.com/) 并启动（运行 `ollama serve` 或打开 Ollama 应用）；
+> 2. 拉一个模型：`ollama pull qwen2.5:3b`（轻量，约 2GB；机器好可换 `qwen2.5:7b`）；
+> 3. 直接用即可，`config.json` 已默认指向 `http://localhost:11434/v1`。
+>
+> 接口为 OpenAI 兼容、用标准库直接 HTTP 调用，无需安装额外 Python 依赖。
+> 若想改用在线免费服务（如智谱 `glm-4-flash`），把 `ai.base_url`/`model` 改掉并填 `api_key` 即可。
 
 ### 自动触发原理
 

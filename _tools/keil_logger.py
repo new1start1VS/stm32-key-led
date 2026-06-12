@@ -2,19 +2,25 @@
 """
 STM32 开发记录助手  (Keil 打开时自动弹出)
 功能:
-  - 记录 main 函数改动
-  - 自动扫描 / 记录新建或修改的 .c / .h 文件
-  - 记录 Excalidraw 笔记 (并扫描 .excalidraw 文件)
-  - 一键保存到 DEVLOG.md
-  - 一键上传到 GitHub (git init / commit / push)
+  ① 记录 main 函数改动 / 实验目标  (可一键自动提取最近改动的 main() 函数体)
+  ② 自动扫描 / 记录新建或修改的 .c / .h 文件 (含代码量统计)
+  ③ AI 总结: 把本次改动 (main 函数 + 改动文件 + git diff) 喂给外部 AI,
+     生成中文开发总结写入文档。默认连本地 Ollama (免费/离线/无需 Key);
+     OpenAI 兼容接口直接 HTTP 调用, 不经过 agent。
+  - 自动识别当前实验 (最近改动的工程文件夹)
+  - 一键保存到 DEVLOG.md (排版好的 Markdown)
+  - 一键上传到 GitHub: 仅当有真实改动时才提交, 未变化的文件不会重复上传
 作者: 自动生成
 """
 import os
 import sys
 import json
 import socket
+import threading
 import subprocess
 import datetime
+import urllib.request
+import urllib.error
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog, scrolledtext
 
@@ -24,18 +30,42 @@ from tkinter import ttk, messagebox, simpledialog, filedialog, scrolledtext
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PROJECT_DIR = os.path.dirname(TOOLS_DIR)          # 上一级 = D:\STM32PRO
 CONFIG_PATH = os.path.join(TOOLS_DIR, "config.json")
+# 扫描 / 统计时忽略的目录: 构建产物 + 标准外设库 (库文件不算"本次改动")
 SKIP_DIRS = {"objects", "listings", "rte", ".git", "_tools",
-             "__pycache__", "dep", "out"}                # 扫描时忽略的构建目录
+             "__pycache__", "dep", "out",
+             "libraries", "library", "cmsis", "start", "startup"}
+
+# 默认使用本地 Ollama (OpenAI 兼容, 免费/离线/无需 Key)。
+# 换成在线服务时, 填 base_url/model/api_key 即可 (例如智谱 glm-4-flash 免费)。
+DEFAULT_AI = {
+    "base_url": "http://localhost:11434/v1",
+    "model": "qwen2.5:3b",
+    "api_key": "",
+}
+
+AI_SYSTEM_PROMPT = (
+    "你是一名嵌入式开发助教。根据用户提供的 STM32 工程本次改动信息"
+    "(实验名称、main 函数、改动的源文件列表、git diff), 用简体中文写一段"
+    "简洁、条理清晰的开发总结, 输出 Markdown。要求:\n"
+    "1. 用 2~4 句话概括本次实现了什么功能 / 解决了什么问题;\n"
+    "2. 用要点列出关键改动 (涉及的外设、寄存器/库函数、配置思路);\n"
+    "3. 如发现可能的 bug 或可改进点, 末尾用『💡 建议』给出 1~3 条;\n"
+    "不要编造代码里没有的内容, 不要复述完整代码。"
+)
 
 
 def load_config():
     cfg = {"project_dir": DEFAULT_PROJECT_DIR, "github_remote": "",
-           "git_branch": "main"}
+           "git_branch": "main", "ai": dict(DEFAULT_AI)}
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             cfg.update(json.load(f))
     except Exception:
         pass
+    # 合并 ai 默认值 (用户可能只填了 api_key)
+    ai = dict(DEFAULT_AI)
+    ai.update(cfg.get("ai") or {})
+    cfg["ai"] = ai
     if not os.path.isdir(cfg.get("project_dir", "")):
         cfg["project_dir"] = DEFAULT_PROJECT_DIR
     return cfg
@@ -63,7 +93,7 @@ def acquire_single_instance(port=51763):
 
 
 # ---------------------------------------------------------------------------
-# 文件扫描
+# 文件扫描 / 代码统计
 # ---------------------------------------------------------------------------
 def scan_files(project_dir, exts, days=7):
     """返回最近 days 天内修改的指定后缀文件 (相对路径, 修改时间)。"""
@@ -85,6 +115,78 @@ def scan_files(project_dir, exts, days=7):
     return out
 
 
+def count_lines(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return sum(1 for _ in f)
+    except Exception:
+        return 0
+
+
+def code_stats(project_dir, days=7):
+    """返回 (文件数, 总行数) — 本次改动的 .c/.h 代码量。"""
+    files = scan_files(project_dir, {".c", ".h"}, days=days)
+    total = sum(count_lines(os.path.join(project_dir, rel)) for rel, _ in files)
+    return len(files), total
+
+
+def detect_current_experiment(project_dir):
+    """根据最近改动的 .c/.h 文件, 推断当前实验所在的顶层文件夹。"""
+    files = scan_files(project_dir, {".c", ".h"}, days=3650)
+    if not files:
+        return ""
+    rel = files[0][0].replace("\\", "/")
+    parts = rel.split("/")
+    return parts[0] if len(parts) > 1 else ""
+
+
+def find_main_c(project_dir, prefer_folder=""):
+    """找最近改动的 main.c; 若给定 prefer_folder 则优先该文件夹内的。"""
+    candidates = []
+    for root, dirs, files in os.walk(project_dir):
+        dirs[:] = [d for d in dirs if d.lower() not in SKIP_DIRS]
+        for fn in files:
+            if fn.lower() == "main.c":
+                full = os.path.join(root, fn)
+                try:
+                    mt = os.path.getmtime(full)
+                except OSError:
+                    continue
+                pref = prefer_folder and (os.sep + prefer_folder + os.sep) in (
+                    full + os.sep)
+                candidates.append((1 if pref else 0, mt, full))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return candidates[0][2]
+
+
+def extract_main_function(path):
+    """从 main.c 中粗略提取 main() 函数体 (按花括号配对)。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except Exception:
+        return None
+    idx = text.find("int main")
+    if idx < 0:
+        idx = text.find(" main(")
+    if idx < 0:
+        return None
+    brace = text.find("{", idx)
+    if brace < 0:
+        return None
+    depth = 0
+    for i in range(brace, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[idx:i + 1]
+    return text[idx:]
+
+
 # ---------------------------------------------------------------------------
 # Git 操作
 # ---------------------------------------------------------------------------
@@ -97,6 +199,75 @@ def run_git(args, cwd):
         return 127, "找不到 git, 请确认已安装并加入 PATH。"
 
 
+def git_changed_files(pd):
+    """返回 (改动文件列表, 原始 porcelain 文本)。空列表 = 工作区干净。"""
+    rc, out = run_git(["status", "--porcelain"], pd)
+    if rc != 0:
+        return None, out
+    files = [ln for ln in out.splitlines() if ln.strip()]
+    return files, out
+
+
+def git_diff(pd, max_chars=8000):
+    """已跟踪文件相对上次提交的 diff + 未跟踪新文件名, 截断到 max_chars。"""
+    rc, diff = run_git(["diff", "HEAD"], pd)
+    if rc != 0:
+        diff = ""
+    rc2, untracked = run_git(["ls-files", "--others", "--exclude-standard"], pd)
+    extra = ""
+    if rc2 == 0 and untracked.strip():
+        extra = "\n[新增未跟踪文件]\n" + untracked.strip()
+    full = (diff or "").strip() + extra
+    if len(full) > max_chars:
+        full = full[:max_chars] + "\n...(diff 已截断)..."
+    return full
+
+
+# ---------------------------------------------------------------------------
+# 外部 AI 调用 (OpenAI 兼容 /chat/completions, 仅用标准库)
+# ---------------------------------------------------------------------------
+def ai_chat(cfg, user_content):
+    ai = cfg.get("ai") or {}
+    base = (ai.get("base_url") or DEFAULT_AI["base_url"]).rstrip("/")
+    key = (ai.get("api_key") or "").strip()      # 本地 Ollama 无需 Key, 可留空
+    model = ai.get("model") or DEFAULT_AI["model"]
+    is_local = ("localhost" in base) or ("127.0.0.1" in base)
+    url = base + "/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0.4,
+        "stream": False,
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if key:                                       # 仅在线服务才带鉴权头
+        headers["Authorization"] = "Bearer " + key
+    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            obj = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        hint = ""
+        if is_local and "model" in body.lower():
+            hint = "\n提示: 模型 \"%s\" 可能还没拉取, 先运行: ollama pull %s" % (
+                model, model)
+        raise RuntimeError("AI 接口返回 %s: %s%s" % (e.code, body[:500], hint))
+    except urllib.error.URLError as e:
+        if is_local:
+            raise RuntimeError(
+                "连不上本地 Ollama (%s)。请确认:\n"
+                "  1. 已安装并启动 Ollama (命令行运行 `ollama serve` 或打开 Ollama 应用)\n"
+                "  2. 已拉取模型: `ollama pull %s`\n"
+                "原始错误: %s" % (base, model, e.reason))
+        raise RuntimeError("无法连接 AI 接口: %s" % e.reason)
+    return obj["choices"][0]["message"]["content"].strip()
+
+
 # ---------------------------------------------------------------------------
 # 主界面
 # ---------------------------------------------------------------------------
@@ -105,8 +276,8 @@ class App:
         self.root = root
         self.cfg = cfg
         root.title("STM32 开发记录助手")
-        root.geometry("760x720")
-        root.minsize(640, 560)
+        root.geometry("780x760")
+        root.minsize(660, 600)
 
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -119,22 +290,33 @@ class App:
             side="left", fill="x", expand=True, padx=6)
         ttk.Button(top, text="更改", command=self.choose_dir).pack(side="left")
 
-        ttk.Label(root, text="记录时间: " + now,
-                  foreground="#666").pack(anchor="w", padx=12)
+        # 时间 + 当前实验
+        info = ttk.Frame(root, padding=(12, 0))
+        info.pack(fill="x")
+        ttk.Label(info, text="记录时间: " + now,
+                  foreground="#666").pack(side="left")
+        self.exp_var = tk.StringVar(value="实验: (检测中…)")
+        ttk.Label(info, textvariable=self.exp_var,
+                  foreground="#1a6").pack(side="left", padx=16)
 
-        # 1) main 函数
-        self.t_main = self._section(
-            root, "① main 函数改动 / 本次实验目标")
-        # 2) .c / .h 文件
+        # ① main 函数
+        f1 = self._section_frame(root, "① main 函数改动 / 本次实验目标")
+        self.t_main = self._add_text(f1, height=7)
+        ttk.Button(f1, text="🧩 自动提取最近改动的 main() 函数",
+                   command=self.fill_main).pack(anchor="e", pady=(4, 0))
+
+        # ② .c / .h 文件
         f2 = self._section_frame(root, "② 新建 / 修改的 .C 和 .H 文件")
         self.t_files = self._add_text(f2, height=6)
-        ttk.Button(f2, text="🔍 自动扫描最近修改的 .c/.h",
+        ttk.Button(f2, text="🔍 自动扫描最近修改的 .c/.h (含代码量统计)",
                    command=self.scan_ch).pack(anchor="e", pady=(4, 0))
-        # 3) Excalidraw
-        f3 = self._section_frame(root, "③ Excalidraw 新加的笔记")
-        self.t_exc = self._add_text(f3, height=5)
-        ttk.Button(f3, text="🔍 扫描项目内 .excalidraw 文件",
-                   command=self.scan_exc).pack(anchor="e", pady=(4, 0))
+
+        # ③ AI 总结
+        f3 = self._section_frame(root, "③ AI 总结 (本地 Ollama, 免费离线)")
+        self.t_ai = self._add_text(f3, height=7)
+        self.ai_btn = ttk.Button(
+            f3, text="🤖 生成 AI 总结", command=self.gen_ai_summary)
+        self.ai_btn.pack(anchor="e", pady=(4, 0))
 
         # commit message + 按钮
         bottom = ttk.Frame(root, padding=(10, 8))
@@ -159,8 +341,8 @@ class App:
         ttk.Label(root, textvariable=self.status, relief="sunken",
                   anchor="w").pack(fill="x", side="bottom")
 
-        # 启动时自动扫描一次
-        self.root.after(200, self.scan_ch)
+        # 启动时自动: 扫描文件 + 识别实验
+        self.root.after(200, self.startup_scan)
 
     # -- UI 辅助 --
     def _section_frame(self, root, title):
@@ -174,10 +356,6 @@ class App:
         t.pack(fill="both", expand=True)
         return t
 
-    def _section(self, root, title, height=5):
-        lf = self._section_frame(root, title)
-        return self._add_text(lf, height)
-
     # -- 业务 --
     def project_dir(self):
         return self.dir_var.get().strip() or DEFAULT_PROJECT_DIR
@@ -187,38 +365,99 @@ class App:
         if d:
             self.dir_var.set(d)
 
+    def startup_scan(self):
+        exp = detect_current_experiment(self.project_dir())
+        self.exp_var.set("实验: " + (exp or "(未识别)"))
+        self.scan_ch()
+
     def scan_ch(self):
-        files = scan_files(self.project_dir(), {".c", ".h"}, days=7)
+        pd = self.project_dir()
+        files = scan_files(pd, {".c", ".h"}, days=7)
+        n, lines = code_stats(pd, days=7)
         if not files:
             txt = "(最近 7 天没有检测到修改过的 .c / .h 文件)"
         else:
             txt = "\n".join(
                 "- {}   [{}]".format(rel, mt.strftime("%m-%d %H:%M"))
                 for rel, mt in files[:60])
+            txt += "\n\n📊 代码量统计: {} 个文件, 共 {} 行".format(n, lines)
         self.t_files.delete("1.0", "end")
         self.t_files.insert("1.0", txt)
-        self.status.set("已扫描 {} 个最近修改的 .c/.h 文件".format(len(files)))
+        self.status.set("已扫描 {} 个 .c/.h 文件 (共 {} 行)".format(n, lines))
 
-    def scan_exc(self):
-        files = scan_files(self.project_dir(), {".excalidraw", ".excalidraw.png",
-                                                ".excalidraw.svg"}, days=3650)
-        cur = self.t_exc.get("1.0", "end").strip()
-        listing = ("\n".join("- " + rel for rel, _ in files)
-                   if files else "(项目内未找到 .excalidraw 文件)")
-        self.t_exc.delete("1.0", "end")
-        self.t_exc.insert("1.0", (cur + "\n" if cur else "") +
-                          "【检测到的 Excalidraw 文件】\n" + listing)
-        self.status.set("已扫描 {} 个 .excalidraw 文件".format(len(files)))
+    def fill_main(self):
+        exp = detect_current_experiment(self.project_dir())
+        path = find_main_c(self.project_dir(), prefer_folder=exp)
+        if not path:
+            messagebox.showinfo("提示", "项目内未找到 main.c。")
+            return
+        body = extract_main_function(path)
+        if not body:
+            messagebox.showinfo("提示", "在 main.c 中未找到 main() 函数。")
+            return
+        rel = os.path.relpath(path, self.project_dir())
+        block = "// 来自 {}\n{}".format(rel, body.strip())
+        self.t_main.delete("1.0", "end")
+        self.t_main.insert("1.0", block)
+        self.status.set("已提取 main() 函数: " + rel)
+
+    def _ai_context(self):
+        pd = self.project_dir()
+        exp = detect_current_experiment(pd)
+        main = self.t_main.get("1.0", "end").strip()
+        files = self.t_files.get("1.0", "end").strip()
+        diff = git_diff(pd)
+        parts = ["【实验名称】\n" + (exp or "(未识别)")]
+        parts.append("\n【main 函数 / 实验目标】\n" + (main or "(未填写)"))
+        parts.append("\n【本次改动的 .c/.h 文件】\n" + (files or "(无)"))
+        parts.append("\n【git diff (相对上次提交)】\n" + (diff or "(无 / 非 git 仓库)"))
+        return "\n".join(parts)
+
+    def gen_ai_summary(self):
+        self.ai_btn.config(state="disabled")
+        self.status.set("正在调用本地 AI 生成总结…")
+        self.t_ai.delete("1.0", "end")
+        self.t_ai.insert("1.0", "⏳ 正在生成, 请稍候…")
+        ctx = self._ai_context()
+
+        def worker():
+            try:
+                text = ai_chat(self.cfg, ctx)
+                self.root.after(0, lambda: self._ai_done(text, None))
+            except Exception as e:
+                self.root.after(0, lambda: self._ai_done(None, str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ai_done(self, text, err):
+        self.ai_btn.config(state="normal")
+        self.t_ai.delete("1.0", "end")
+        if err:
+            self.t_ai.insert("1.0", "❌ 生成失败:\n" + err)
+            self.status.set("AI 总结失败")
+        else:
+            self.t_ai.insert("1.0", text)
+            self.status.set("AI 总结已生成 ✅ (可手动编辑后再保存)")
 
     def build_entry(self):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        pd = self.project_dir()
+        exp = detect_current_experiment(pd)
+        n, lines = code_stats(pd, days=7)
         main = self.t_main.get("1.0", "end").strip()
         files = self.t_files.get("1.0", "end").strip()
-        exc = self.t_exc.get("1.0", "end").strip()
-        parts = ["\n## " + now + "\n"]
-        parts.append("### ① main 函数 / 实验目标\n" + (main or "_(未填写)_"))
+        ai = self.t_ai.get("1.0", "end").strip()
+        parts = ["\n## " + now]
+        if exp:
+            parts.append("\n> **本次实验:** " + exp +
+                         "　|　**代码量:** {} 文件 / {} 行".format(n, lines))
+        parts.append("\n### ① main 函数 / 实验目标\n")
+        if main:
+            parts.append("```c\n" + main + "\n```")
+        else:
+            parts.append("_(未填写)_")
         parts.append("\n### ② 新建 / 修改的 .C 和 .H 文件\n" + (files or "_(无)_"))
-        parts.append("\n### ③ Excalidraw 笔记\n" + (exc or "_(无)_"))
+        parts.append("\n### ③ AI 总结\n" + (ai or "_(未生成)_"))
         return "\n".join(parts) + "\n\n---\n"
 
     def save_log(self):
@@ -271,7 +510,8 @@ class App:
         branch = self.cfg.get("git_branch", "main")
         log = []
 
-        if not os.path.isdir(os.path.join(pd, ".git")):
+        first_time = not os.path.isdir(os.path.join(pd, ".git"))
+        if first_time:
             rc, out = run_git(["init"], pd); log.append("init:\n" + out)
             run_git(["branch", "-M", branch], pd)
             gi = os.path.join(pd, ".gitignore")
@@ -280,12 +520,24 @@ class App:
                     f.write("# Keil 构建产物\nObjects/\nListings/\n*.o\n*.crf\n"
                             "*.d\n*.bak\n*.dep\n*.lst\n*.map\n__pycache__/\n")
 
+        # 仅当有真实改动时才提交, 避免未变化文件重复上传
+        if not first_time:
+            changed, _ = git_changed_files(pd)
+            if changed is not None and len(changed) == 0:
+                self.status.set("没有任何文件改动, 无需上传 ✅")
+                messagebox.showinfo("无需上传",
+                                    "相比上次提交没有改动的文件, 无需重复上传。")
+                return
+
         if self.ensure_remote(pd) is None:
             self.status.set("已取消上传 (未填写仓库地址)")
             return
 
         run_git(["branch", "-M", branch], pd)
         run_git(["add", "-A"], pd)
+        # 记录本次实际纳入提交的文件
+        rc, staged = run_git(["diff", "--cached", "--name-status"], pd)
+        log.append("本次改动文件:\n" + (staged.strip() or "(无)"))
         rc, out = run_git(
             ["commit", "-m", self.commit_var.get() or "update"], pd)
         log.append("commit:\n" + out)
@@ -296,7 +548,7 @@ class App:
         self.status.set("上传成功 ✅" if ok else "上传失败, 详见弹窗 ❌")
         win = tk.Toplevel(self.root)
         win.title("GitHub 上传结果")
-        win.geometry("680x420")
+        win.geometry("680x440")
         box = scrolledtext.ScrolledText(win, wrap="word",
                                         font=("Consolas", 9))
         box.pack(fill="both", expand=True)
