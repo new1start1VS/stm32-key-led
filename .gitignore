@@ -1,0 +1,33 @@
+# ---- Keil uVision 编译产物 / 临时文件 ----
+Objects/
+Listings/
+DebugConfig/
+RTE/_*/
+*.o
+*.crf
+*.d
+*.dep
+*.lst
+*.map
+*.htm
+*.bak
+*.lnp
+*.iex
+*.sct
+*.scr
+*.axf
+*.build_log.htm
+*.uvguix.*
+*.uvgui.*
+JLinkLog.txt
+*.lock
+
+# ---- Claude Code 本地配置 (不入库) ----
+.claude/
+
+# ---- 工具 / 系统 ----
+__pycache__/
+*.pyc
+Thumbs.db
+desktop.ini
+.DS_Store
