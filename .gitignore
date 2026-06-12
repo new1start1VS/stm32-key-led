@@ -1,4 +1,4 @@
-# ---- Keil uVision 编译产物 / 临时文件 ----
+# ---- Keil uVision / STM32 编译产物 / 临时文件 ----
 Objects/
 Listings/
 DebugConfig/
@@ -16,6 +16,7 @@ RTE/_*/
 *.sct
 *.scr
 *.axf
+*.uvoptx
 *.build_log.htm
 *.uvguix.*
 *.uvgui.*
@@ -25,9 +26,11 @@ JLinkLog.txt
 # ---- Claude Code 本地配置 (不入库) ----
 .claude/
 
-# ---- 工具 / 系统 ----
+# ---- 工具 / 编辑器 / 系统 ----
 __pycache__/
 *.pyc
+.vscode/
+.idea/
 Thumbs.db
 desktop.ini
 .DS_Store
