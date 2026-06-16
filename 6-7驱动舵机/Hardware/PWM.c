@@ -7,7 +7,7 @@ void PWM_Init(void)
     
     GPIO_InitTypeDef GPIO_InitStructure;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;    
     GPIO_Init (GPIOA, &GPIO_InitStructure);
     
@@ -17,25 +17,26 @@ void PWM_Init(void)
     TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruture;
     TIM_TimeBaseInitStruture.TIM_ClockDivision = TIM_CKD_DIV1;
     TIM_TimeBaseInitStruture.TIM_CounterMode = TIM_CounterMode_Up;
-    TIM_TimeBaseInitStruture.TIM_Period = 1000                                                           - 1;
+    TIM_TimeBaseInitStruture.TIM_Period = 20000 - 1;                                                          
     TIM_TimeBaseInitStruture.TIM_Prescaler = 72 - 1;
     TIM_TimeBaseInitStruture.TIM_RepetitionCounter = 0;
     TIM_TimeBaseInit (TIM2,&TIM_TimeBaseInitStruture);
     
     TIM_OCInitTypeDef TIM_OCInitStructure;
+    
     TIM_OCStructInit(&TIM_OCInitStructure);
     TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_PWM1;
     TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_High;
     TIM_OCInitStructure.TIM_OutputState = ENABLE;
     TIM_OCInitStructure.TIM_Pulse = 0;
+    TIM_OC2Init(TIM2, &TIM_OCInitStructure);
     TIM_OC1Init(TIM2, &TIM_OCInitStructure);
-   
     
     TIM_Cmd(TIM2,ENABLE);
 }
 
 
-void PWM_SetCompare1(uint16_t Compare)
+void PWM_SetCompare2(uint16_t Compare)
 {
-    TIM_SetCompare1(TIM2, Compare);
+    TIM_SetCompare2(TIM2, Compare);
 }

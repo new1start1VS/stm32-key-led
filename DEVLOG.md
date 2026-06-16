@@ -892,3 +892,269 @@ python script.py /path/to/project
 希望这段解释对你有所帮助！如果有更多具体问题，请随时提问。
 
 ---
+
+## 2026-06-16 14:26:20
+
+> **本次实验:** 6-7驱动舵机　|　**代码量:** 50 文件 / 1513 行
+
+### ① 改动较大的函数 / 实验目标
+
+```c
+// 来自 6-6/user/main.c  ·  main()  ·  本次改动 14 行
+int main(void)
+{
+    OLED_Init();
+    PWM_Init ();
+    
+   
+    
+    
+   
+    while (1)
+	{
+		for (i = 0; i <= 100; i++)
+		{
+			PWM_SetCompare1(i);
+			Delay_ms(10);
+		}
+		for (i = 0; i <= 100; i++)
+		{
+			PWM_SetCompare1(100 - i);
+			Delay_ms(10);
+		}
+	}
+}
+
+// 来自 6-6/Hardware/PWM.c  ·  PWM_Init()  ·  本次改动 2 行
+void PWM_Init(void)
+{
+    RCC_APB1PeriphClockCmd (RCC_APB1Periph_TIM2,ENABLE);    
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA,ENABLE);
+    
+    GPIO_InitTypeDef GPIO_InitStructure;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;    
+    GPIO_Init (GPIOA, &GPIO_InitStructure);
+    
+   
+    TIM_InternalClockConfig(TIM2);    
+    
+    TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruture;
+    TIM_TimeBaseInitStruture.TIM_ClockDivision = TIM_CKD_DIV1;
+    TIM_TimeBaseInitStruture.TIM_CounterMode = TIM_CounterMode_Up;
+    TIM_TimeBaseInitStruture.TIM_Period = 1000                                                           - 1;
+    TIM_TimeBaseInitStruture.TIM_Prescaler = 72 - 1;
+    TIM_TimeBaseInitStruture.TIM_RepetitionCounter = 0;
+    TIM_TimeBaseInit (TIM2,&TIM_TimeBaseInitStruture);
+    
+    TIM_OCInitTypeDef TIM_OCInitStructure;
+    TIM_OCStructInit(&TIM_OCInitStructure);
+    TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_PWM1;
+    TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_High;
+    TIM_OCInitStructure.TIM_OutputState = ENABLE;
+    TIM_OCInitStructure.TIM_Pulse = 0;
+    TIM_OC1Init(TIM2, &TIM_OCInitStructure);
+   
+    
+    TIM_Cmd(TIM2,ENABLE);
+}
+
+// 来自 6-6/Hardware/PWM.c  ·  PWM_SetCompare1()  ·  本次改动 1 行
+void PWM_SetCompare1(uint16_t Compare)
+{
+    TIM_SetCompare1(TIM2, Compare);
+}
+```
+
+### ② 新建 / 修改的 .C 和 .H 文件
+- 6-7驱动舵机\user\main.c   [06-16 14:13]
+- 6-7驱动舵机\Hardware\PWM.c   [06-16 13:37]
+- 6-7驱动舵机\Hardware\PWM.h   [06-16 13:27]
+- 6-6\Hardware\PWM.c   [06-16 13:23]
+- 6-6\user\main.c   [06-16 13:17]
+- 6-6\Hardware\PWM.h   [06-16 13:17]
+- 6-5\System\Timer.c   [06-13 20:37]
+- 6-6\System\Timer.c   [06-13 20:37]
+- 6-7驱动舵机\System\Timer.c   [06-13 20:37]
+- 6-5\user\main.c   [06-13 20:36]
+- 6- 4定时器的etr引脚时钟，外部的\System\Timer.c   [06-12 21:20]
+- 6- 4定时器的etr引脚时钟，外部的\System\Timer.h   [06-12 21:03]
+- 6-5\System\Timer.h   [06-12 21:03]
+- 6-6\System\Timer.h   [06-12 21:03]
+- 6-7驱动舵机\System\Timer.h   [06-12 21:03]
+- 6- 4定时器的etr引脚时钟，外部的\user\main.c   [06-12 21:01]
+- 6-3 定时器的外部时钟\Hardware\OLED.c   [06-12 20:59]
+- 6-2 TIM的应用\System\Timer.c   [06-12 17:17]
+- 6-3 定时器的外部时钟\System\Timer.c   [06-12 17:17]
+- 6-2 TIM的应用\user\main.c   [06-12 17:16]
+- 6-3 定时器的外部时钟\user\main.c   [06-12 17:16]
+- 6-2 TIM的应用\System\Timer.h   [06-12 17:01]
+- 6-3 定时器的外部时钟\System\Timer.h   [06-12 17:01]
+- 3-33\user\stm32f10x_it.c   [06-12 15:53]
+- 3-33\user\stm32f10x_it.h   [06-12 15:53]
+- 3-33\user\stm32f10x_conf.h   [06-12 15:53]
+- 3-33\user\main.c   [06-12 15:53]
+- 3-33\System\Delay.c   [06-12 15:53]
+- 3-33\System\Delay.h   [06-12 15:53]
+- 3-33\Hardware\Led.c   [06-12 15:53]
+- 3-33\Hardware\Led.h   [06-12 15:53]
+- 3-33\Hardware\Buzzer.h   [06-12 15:53]
+- 3-33\Hardware\KEY.c   [06-12 15:53]
+- 3-33\Hardware\Key.h   [06-12 15:53]
+- 3-33\Hardware\Buzzer.c   [06-12 15:53]
+- 6- 4定时器的etr引脚时钟，外部的\System\Time.c   [06-12 14:31]
+- 6-2 TIM的应用\System\Time.c   [06-12 14:31]
+- 6-3 定时器的外部时钟\System\Time.c   [06-12 14:31]
+- 6-5\System\Time.c   [06-12 14:31]
+- 6-6\System\Time.c   [06-12 14:31]
+- 6-7驱动舵机\System\Time.c   [06-12 14:31]
+- 6- 4定时器的etr引脚时钟，外部的\System\Time.h   [06-11 21:54]
+- 6-2 TIM的应用\System\Time.h   [06-11 21:54]
+- 6-3 定时器的外部时钟\System\Time.h   [06-11 21:54]
+- 6-5\System\Time.h   [06-11 21:54]
+- 6-6\System\Time.h   [06-11 21:54]
+- 6-7驱动舵机\System\Time.h   [06-11 21:54]
+- 5-2 EXTI中断的引进\Hardware\CountSensor.c   [06-11 20:38]
+- 5-2 EXTI中断的引进\Hardware\CountSensor.h   [06-11 19:39]
+- 5-2 EXTI中断的引进\user\main.c   [06-11 18:29]
+
+📊 代码量统计: 50 个文件, 共 1513 行
+
+### ③ AI 总结
+_(未生成)_
+
+---
+
+## 2026-06-16 14:26:22
+
+> **本次实验:** 6-7驱动舵机　|　**代码量:** 50 文件 / 1513 行
+
+### ① 改动较大的函数 / 实验目标
+
+```c
+// 来自 6-6/user/main.c  ·  main()  ·  本次改动 14 行
+int main(void)
+{
+    OLED_Init();
+    PWM_Init ();
+    
+   
+    
+    
+   
+    while (1)
+	{
+		for (i = 0; i <= 100; i++)
+		{
+			PWM_SetCompare1(i);
+			Delay_ms(10);
+		}
+		for (i = 0; i <= 100; i++)
+		{
+			PWM_SetCompare1(100 - i);
+			Delay_ms(10);
+		}
+	}
+}
+
+// 来自 6-6/Hardware/PWM.c  ·  PWM_Init()  ·  本次改动 2 行
+void PWM_Init(void)
+{
+    RCC_APB1PeriphClockCmd (RCC_APB1Periph_TIM2,ENABLE);    
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA,ENABLE);
+    
+    GPIO_InitTypeDef GPIO_InitStructure;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;    
+    GPIO_Init (GPIOA, &GPIO_InitStructure);
+    
+   
+    TIM_InternalClockConfig(TIM2);    
+    
+    TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruture;
+    TIM_TimeBaseInitStruture.TIM_ClockDivision = TIM_CKD_DIV1;
+    TIM_TimeBaseInitStruture.TIM_CounterMode = TIM_CounterMode_Up;
+    TIM_TimeBaseInitStruture.TIM_Period = 1000                                                           - 1;
+    TIM_TimeBaseInitStruture.TIM_Prescaler = 72 - 1;
+    TIM_TimeBaseInitStruture.TIM_RepetitionCounter = 0;
+    TIM_TimeBaseInit (TIM2,&TIM_TimeBaseInitStruture);
+    
+    TIM_OCInitTypeDef TIM_OCInitStructure;
+    TIM_OCStructInit(&TIM_OCInitStructure);
+    TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_PWM1;
+    TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_High;
+    TIM_OCInitStructure.TIM_OutputState = ENABLE;
+    TIM_OCInitStructure.TIM_Pulse = 0;
+    TIM_OC1Init(TIM2, &TIM_OCInitStructure);
+   
+    
+    TIM_Cmd(TIM2,ENABLE);
+}
+
+// 来自 6-6/Hardware/PWM.c  ·  PWM_SetCompare1()  ·  本次改动 1 行
+void PWM_SetCompare1(uint16_t Compare)
+{
+    TIM_SetCompare1(TIM2, Compare);
+}
+```
+
+### ② 新建 / 修改的 .C 和 .H 文件
+- 6-7驱动舵机\user\main.c   [06-16 14:13]
+- 6-7驱动舵机\Hardware\PWM.c   [06-16 13:37]
+- 6-7驱动舵机\Hardware\PWM.h   [06-16 13:27]
+- 6-6\Hardware\PWM.c   [06-16 13:23]
+- 6-6\user\main.c   [06-16 13:17]
+- 6-6\Hardware\PWM.h   [06-16 13:17]
+- 6-5\System\Timer.c   [06-13 20:37]
+- 6-6\System\Timer.c   [06-13 20:37]
+- 6-7驱动舵机\System\Timer.c   [06-13 20:37]
+- 6-5\user\main.c   [06-13 20:36]
+- 6- 4定时器的etr引脚时钟，外部的\System\Timer.c   [06-12 21:20]
+- 6- 4定时器的etr引脚时钟，外部的\System\Timer.h   [06-12 21:03]
+- 6-5\System\Timer.h   [06-12 21:03]
+- 6-6\System\Timer.h   [06-12 21:03]
+- 6-7驱动舵机\System\Timer.h   [06-12 21:03]
+- 6- 4定时器的etr引脚时钟，外部的\user\main.c   [06-12 21:01]
+- 6-3 定时器的外部时钟\Hardware\OLED.c   [06-12 20:59]
+- 6-2 TIM的应用\System\Timer.c   [06-12 17:17]
+- 6-3 定时器的外部时钟\System\Timer.c   [06-12 17:17]
+- 6-2 TIM的应用\user\main.c   [06-12 17:16]
+- 6-3 定时器的外部时钟\user\main.c   [06-12 17:16]
+- 6-2 TIM的应用\System\Timer.h   [06-12 17:01]
+- 6-3 定时器的外部时钟\System\Timer.h   [06-12 17:01]
+- 3-33\user\stm32f10x_it.c   [06-12 15:53]
+- 3-33\user\stm32f10x_it.h   [06-12 15:53]
+- 3-33\user\stm32f10x_conf.h   [06-12 15:53]
+- 3-33\user\main.c   [06-12 15:53]
+- 3-33\System\Delay.c   [06-12 15:53]
+- 3-33\System\Delay.h   [06-12 15:53]
+- 3-33\Hardware\Led.c   [06-12 15:53]
+- 3-33\Hardware\Led.h   [06-12 15:53]
+- 3-33\Hardware\Buzzer.h   [06-12 15:53]
+- 3-33\Hardware\KEY.c   [06-12 15:53]
+- 3-33\Hardware\Key.h   [06-12 15:53]
+- 3-33\Hardware\Buzzer.c   [06-12 15:53]
+- 6- 4定时器的etr引脚时钟，外部的\System\Time.c   [06-12 14:31]
+- 6-2 TIM的应用\System\Time.c   [06-12 14:31]
+- 6-3 定时器的外部时钟\System\Time.c   [06-12 14:31]
+- 6-5\System\Time.c   [06-12 14:31]
+- 6-6\System\Time.c   [06-12 14:31]
+- 6-7驱动舵机\System\Time.c   [06-12 14:31]
+- 6- 4定时器的etr引脚时钟，外部的\System\Time.h   [06-11 21:54]
+- 6-2 TIM的应用\System\Time.h   [06-11 21:54]
+- 6-3 定时器的外部时钟\System\Time.h   [06-11 21:54]
+- 6-5\System\Time.h   [06-11 21:54]
+- 6-6\System\Time.h   [06-11 21:54]
+- 6-7驱动舵机\System\Time.h   [06-11 21:54]
+- 5-2 EXTI中断的引进\Hardware\CountSensor.c   [06-11 20:38]
+- 5-2 EXTI中断的引进\Hardware\CountSensor.h   [06-11 19:39]
+- 5-2 EXTI中断的引进\user\main.c   [06-11 18:29]
+
+📊 代码量统计: 50 个文件, 共 1513 行
+
+### ③ AI 总结
+_(未生成)_
+
+---
