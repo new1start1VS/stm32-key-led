@@ -13,6 +13,7 @@ STM32 开发记录助手  (Keil 打开时自动弹出)
 作者: 自动生成
 """
 import os
+import re
 import sys
 import json
 import socket
@@ -51,6 +52,17 @@ AI_SYSTEM_PROMPT = (
     "2. 用要点列出关键改动 (涉及的外设、寄存器/库函数、配置思路);\n"
     "3. 如发现可能的 bug 或可改进点, 末尾用『💡 建议』给出 1~3 条;\n"
     "不要编造代码里没有的内容, 不要复述完整代码。"
+)
+
+# 上传 GitHub 前, 用 AI 把 commit 信息润色成一行规范的提交说明。
+AI_COMMIT_PROMPT = (
+    "你是一名严谨的嵌入式工程师, 负责写 git 提交信息。根据用户给出的本次改动"
+    "(实验名称、改动较大的函数、改动文件列表、git diff 摘要, 以及用户原始的"
+    "commit 草稿), 生成一条简洁规范的中文 commit message。要求:\n"
+    "1. 只输出一行(不超过 50 个汉字), 不要任何解释、引号或 Markdown;\n"
+    "2. 用动词开头, 概括做了什么(例如『新增』『修复』『优化』『重构』);\n"
+    "3. 如有明确模块/外设, 用『模块: 说明』格式(例如『USART: 增加 DMA 收发』);\n"
+    "4. 忠于实际改动, 不要编造代码里没有的内容。"
 )
 
 
@@ -188,6 +200,203 @@ def extract_main_function(path):
 
 
 # ---------------------------------------------------------------------------
+# C 函数级解析 (用于"改动较大的函数")
+# ---------------------------------------------------------------------------
+_C_CTRL = {"if", "for", "while", "switch", "do", "else", "return", "sizeof"}
+_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+def parse_c_functions(text):
+    """粗略解析 C 源码, 返回 [(name, start_line, end_line)] (行号从 1 起)。
+
+    跳过注释与字符串里的花括号, 按顶层 {} 配对识别函数定义。
+    """
+    line_starts = [0]
+    for idx, ch in enumerate(text):
+        if ch == "\n":
+            line_starts.append(idx + 1)
+
+    def line_of(pos):
+        lo, hi = 0, len(line_starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if line_starts[mid] <= pos:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo + 1
+
+    funcs = []
+    depth = 0
+    func_start_pos = -1
+    i, n = 0, len(text)
+    in_line_c = in_block_c = in_str = in_chr = False
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if in_line_c:
+            if ch == "\n":
+                in_line_c = False
+        elif in_block_c:
+            if ch == "*" and nxt == "/":
+                in_block_c = False
+                i += 1
+        elif in_str:
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
+                in_str = False
+        elif in_chr:
+            if ch == "\\":
+                i += 1
+            elif ch == "'":
+                in_chr = False
+        elif ch == "/" and nxt == "/":
+            in_line_c = True
+            i += 1
+        elif ch == "/" and nxt == "*":
+            in_block_c = True
+            i += 1
+        elif ch == '"':
+            in_str = True
+        elif ch == "'":
+            in_chr = True
+        elif ch == "{":
+            if depth == 0:
+                # 顶层 '{': 向前找函数签名 (名字紧贴其参数表的 '(' 之前)。
+                # 在 ';' '}' 处停止; 同时不跨越空行或预处理行(#...), 以免把
+                # 上一段 #include / 注释 误并入函数体。
+                header_start = i
+                j = i - 1
+                while j >= 0 and text[j] not in ";}":
+                    if text[j] == "\n":
+                        # 该换行所在前一行: 空行或以 # 开头 → 视作边界
+                        ls = text.rfind("\n", 0, j) + 1
+                        prev_line = text[ls:j].strip()
+                        if prev_line == "" or prev_line.startswith("#"):
+                            break
+                    header_start = j
+                    j -= 1
+                header = text[header_start:i]
+                name = _func_name_from_header(header)
+                func_start_pos = header_start if name else -1
+                if name:
+                    func_start_pos = (header_start, name)
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and isinstance(func_start_pos, tuple):
+                    sp, name = func_start_pos
+                    # 跳过签名前的空白/换行, 让起始行落在签名所在行
+                    while sp < i and text[sp] in " \t\r\n":
+                        sp += 1
+                    funcs.append((name, line_of(sp), line_of(i)))
+                    func_start_pos = -1
+        i += 1
+    return funcs
+
+
+def _func_name_from_header(header):
+    """从 '{' 之前的文本里取函数名 (与参数表 '(' 紧邻的标识符)。失败返回 None。"""
+    paren = header.rfind("(")
+    if paren < 0:
+        return None
+    before = header[:paren].rstrip()
+    m = None
+    for m in _IDENT_RE.finditer(before):
+        pass
+    if not m:
+        return None
+    name = m.group(0)
+    if name in _C_CTRL:
+        return None
+    return name
+
+
+def _changed_lines_by_file(pd):
+    """解析 git diff (新文件侧), 返回 {相对路径: set(改动行号)}。"""
+    rc, diff = run_git(["diff", "HEAD", "--unified=0"], pd)
+    if rc != 0 or not diff:
+        return {}
+    result = {}
+    cur = None
+    new_ln = 0
+    hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+    for ln in diff.splitlines():
+        if ln.startswith("+++ "):
+            path = ln[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            cur = None if path == "/dev/null" else path.replace("/", os.sep)
+            result.setdefault(cur, set())
+        elif ln.startswith("@@"):
+            m = hunk_re.match(ln)
+            if m and cur is not None:
+                new_ln = int(m.group(1))
+                # 删除型 hunk (新侧 0 行) 也归到该锚点行
+                if (m.group(2) or "1") == "0":
+                    result[cur].add(max(new_ln, 1))
+        elif cur is not None and ln.startswith("+") and not ln.startswith("+++"):
+            result[cur].add(new_ln)
+            new_ln += 1
+        elif cur is not None and ln.startswith("-") and not ln.startswith("---"):
+            pass  # 删除行不前进新侧行号
+        elif cur is not None and not ln.startswith("\\"):
+            new_ln += 1  # 上下文行 (-U0 下基本不出现)
+    return result
+
+
+def changed_functions(pd, top_n=3, max_body=2000):
+    """找出本次改动最大的若干函数。
+
+    返回 [{file, name, changed, body}], 按改动行数降序。
+    依赖 git diff; 若非 git 仓库或无改动则返回 []。
+    """
+    changed_map = _changed_lines_by_file(pd)
+    rc, untracked = run_git(["ls-files", "--others", "--exclude-standard"], pd)
+    untracked_files = []
+    if rc == 0:
+        untracked_files = [u.strip() for u in untracked.splitlines()
+                           if u.strip().lower().endswith((".c", ".h"))]
+
+    ranked = []
+    seen = set()
+
+    def consider(rel, lineset, whole_new=False):
+        full = os.path.join(pd, rel)
+        if not os.path.isfile(full) or full in seen:
+            return
+        seen.add(full)
+        try:
+            with open(full, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except Exception:
+            return
+        for name, s, e in parse_c_functions(text):
+            if whole_new:
+                cnt = e - s + 1
+            else:
+                cnt = sum(1 for L in lineset if s <= L <= e)
+            if cnt <= 0:
+                continue
+            body = "\n".join(text.splitlines()[s - 1:e])
+            if len(body) > max_body:
+                body = body[:max_body] + "\n/* …(已截断)… */"
+            ranked.append({"file": rel.replace("\\", "/"), "name": name,
+                           "changed": cnt, "body": body})
+
+    for rel, lineset in changed_map.items():
+        if rel and rel.lower().endswith((".c", ".h")):
+            consider(rel, lineset)
+    for rel in untracked_files:
+        consider(rel.replace("/", os.sep), None, whole_new=True)
+
+    ranked.sort(key=lambda d: d["changed"], reverse=True)
+    return ranked[:top_n]
+
+
+# ---------------------------------------------------------------------------
 # Git 操作
 # ---------------------------------------------------------------------------
 def run_git(args, cwd):
@@ -226,7 +435,7 @@ def git_diff(pd, max_chars=8000):
 # ---------------------------------------------------------------------------
 # 外部 AI 调用 (OpenAI 兼容 /chat/completions, 仅用标准库)
 # ---------------------------------------------------------------------------
-def ai_chat(cfg, user_content):
+def ai_chat(cfg, user_content, system_prompt=None, temperature=0.4):
     ai = cfg.get("ai") or {}
     base = (ai.get("base_url") or DEFAULT_AI["base_url"]).rstrip("/")
     key = (ai.get("api_key") or "").strip()      # 本地 Ollama 无需 Key, 可留空
@@ -236,10 +445,10 @@ def ai_chat(cfg, user_content):
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt or AI_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        "temperature": 0.4,
+        "temperature": temperature,
         "stream": False,
     }
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -266,6 +475,19 @@ def ai_chat(cfg, user_content):
                 "原始错误: %s" % (base, model, e.reason))
         raise RuntimeError("无法连接 AI 接口: %s" % e.reason)
     return obj["choices"][0]["message"]["content"].strip()
+
+
+def polish_commit_message(cfg, draft, context):
+    """调用 AI 把 commit 草稿润色成一行规范提交说明。失败时抛异常。"""
+    user = ("【用户原始 commit 草稿】\n" + (draft or "(空)") +
+            "\n\n【本次改动信息】\n" + context)
+    text = ai_chat(cfg, user, system_prompt=AI_COMMIT_PROMPT, temperature=0.3)
+    # 模型可能多嘴, 只取第一行非空内容并去掉首尾引号/反引号
+    for line in text.splitlines():
+        line = line.strip().strip("`").strip('"').strip("'").strip()
+        if line:
+            return line[:80]
+    return draft
 
 
 # ---------------------------------------------------------------------------
@@ -299,11 +521,15 @@ class App:
         ttk.Label(info, textvariable=self.exp_var,
                   foreground="#1a6").pack(side="left", padx=16)
 
-        # ① main 函数
-        f1 = self._section_frame(root, "① main 函数改动 / 本次实验目标")
-        self.t_main = self._add_text(f1, height=7)
-        ttk.Button(f1, text="🧩 自动提取最近改动的 main() 函数",
-                   command=self.fill_main).pack(anchor="e", pady=(4, 0))
+        # ① 改动较大的函数 / 本次实验目标
+        f1 = self._section_frame(root, "① 改动较大的函数 / 本次实验目标")
+        self.t_main = self._add_text(f1, height=8)
+        f1btns = ttk.Frame(f1)
+        f1btns.pack(anchor="e", pady=(4, 0))
+        ttk.Button(f1btns, text="🔥 提取本次改动最大的函数",
+                   command=self.fill_changed_funcs).pack(side="left")
+        ttk.Button(f1btns, text="🧩 仅提取 main()",
+                   command=self.fill_main).pack(side="left", padx=(6, 0))
 
         # ② .c / .h 文件
         f2 = self._section_frame(root, "② 新建 / 修改的 .C 和 .H 文件")
@@ -401,6 +627,24 @@ class App:
         self.t_main.insert("1.0", block)
         self.status.set("已提取 main() 函数: " + rel)
 
+    def fill_changed_funcs(self):
+        """按 git diff 改动行数, 提取本次改动最大的几个函数体。"""
+        pd = self.project_dir()
+        funcs = changed_functions(pd, top_n=3)
+        if not funcs:
+            # 没有 git 改动 (或非 git 仓库) → 退回到 main()
+            self.fill_main()
+            self.status.set("未检测到 git 改动, 已退回提取 main()")
+            return
+        blocks = []
+        for f in funcs:
+            blocks.append("// 来自 {}  ·  {}()  ·  本次改动 {} 行\n{}".format(
+                f["file"], f["name"], f["changed"], f["body"].strip()))
+        self.t_main.delete("1.0", "end")
+        self.t_main.insert("1.0", "\n\n".join(blocks))
+        names = ", ".join("{}({})".format(f["name"], f["changed"]) for f in funcs)
+        self.status.set("已提取改动最大的函数: " + names)
+
     def _ai_context(self):
         pd = self.project_dir()
         exp = detect_current_experiment(pd)
@@ -408,7 +652,7 @@ class App:
         files = self.t_files.get("1.0", "end").strip()
         diff = git_diff(pd)
         parts = ["【实验名称】\n" + (exp or "(未识别)")]
-        parts.append("\n【main 函数 / 实验目标】\n" + (main or "(未填写)"))
+        parts.append("\n【改动较大的函数 / 实验目标】\n" + (main or "(未填写)"))
         parts.append("\n【本次改动的 .c/.h 文件】\n" + (files or "(无)"))
         parts.append("\n【git diff (相对上次提交)】\n" + (diff or "(无 / 非 git 仓库)"))
         return "\n".join(parts)
@@ -451,7 +695,7 @@ class App:
         if exp:
             parts.append("\n> **本次实验:** " + exp +
                          "　|　**代码量:** {} 文件 / {} 行".format(n, lines))
-        parts.append("\n### ① main 函数 / 实验目标\n")
+        parts.append("\n### ① 改动较大的函数 / 实验目标\n")
         if main:
             parts.append("```c\n" + main + "\n```")
         else:
@@ -503,6 +747,32 @@ class App:
         run_git(["remote", "add", "origin", remote.strip()], pd)
         return remote.strip()
 
+    def _ai_polish_commit(self, draft, log):
+        """上传时调用功能三润色 commit 信息, 弹窗让用户确认/编辑。
+
+        返回最终 commit 文本; 用户取消则返回 None; AI 失败则回退到 draft。
+        """
+        self.status.set("正在调用 AI 润色 commit 信息…")
+        self.root.update_idletasks()
+        context = self._ai_context()
+        try:
+            polished = polish_commit_message(self.cfg, draft, context)
+            log.append("commit 润色: 「%s」→「%s」" % (draft, polished))
+        except Exception as e:
+            polished = draft
+            log.append("commit 润色失败(用原草稿): " + str(e))
+            self.status.set("AI 润色失败, 使用原 commit 信息")
+
+        # 让用户确认/微调最终提交信息
+        final = simpledialog.askstring(
+            "确认提交信息", "AI 已润色 commit 信息, 可直接确认或修改:",
+            initialvalue=polished, parent=self.root)
+        if final is None:
+            return None
+        final = final.strip() or polished
+        self.commit_var.set(final)
+        return final
+
     def upload_github(self):
         if not self.save_log():
             return
@@ -538,9 +808,16 @@ class App:
         # 记录本次实际纳入提交的文件
         rc, staged = run_git(["diff", "--cached", "--name-status"], pd)
         log.append("本次改动文件:\n" + (staged.strip() or "(无)"))
-        rc, out = run_git(
-            ["commit", "-m", self.commit_var.get() or "update"], pd)
-        log.append("commit:\n" + out)
+
+        # 调用功能三(AI): 把 commit 草稿润色成一行规范提交说明, 失败则用原草稿
+        commit_msg = self.commit_var.get().strip() or "update"
+        polished = self._ai_polish_commit(commit_msg, log)
+        if polished is None:                 # 用户在确认框里取消了上传
+            self.status.set("已取消上传")
+            return
+        commit_msg = polished
+        rc, out = run_git(["commit", "-m", commit_msg], pd)
+        log.append("commit (" + commit_msg + "):\n" + out)
         rc, out = run_git(["push", "-u", "origin", branch], pd)
         log.append("push:\n" + out)
 

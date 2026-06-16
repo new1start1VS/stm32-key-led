@@ -631,3 +631,264 @@ int main(void)
 这些文件的组织结构有助于开发者快速上手并进行项目开发，同时保持代码整洁和易于维护。如果你需要进一步了解某个特定文件的功能或使用方法，请提供更多细节。
 
 ---
+
+## 2026-06-16 13:11:19
+
+> **本次实验:** 6-6　|　**代码量:** 43 文件 / 1371 行
+
+### ① 改动较大的函数 / 实验目标
+
+```c
+// 来自 6-5/Hardware/OLED.c  ·  OLED_Init()  ·  本次改动 56 行
+/**
+  * @brief  OLED初始化
+  * @param  无
+  * @retval 无
+  */
+void OLED_Init(void)
+{
+	uint32_t i, j;
+	
+	for (i = 0; i < 1000; i++)			//上电延时
+	{
+		for (j = 0; j < 1000; j++);
+	}
+	
+	OLED_I2C_Init();			//端口初始化
+	
+	OLED_WriteCommand(0xAE);	//关闭显示
+	
+	OLED_WriteCommand(0xD5);	//设置显示时钟分频比/振荡器频率
+	OLED_WriteCommand(0x80);
+	
+	OLED_WriteCommand(0xA8);	//设置多路复用率
+	OLED_WriteCommand(0x3F);
+	
+	OLED_WriteCommand(0xD3);	//设置显示偏移
+	OLED_WriteCommand(0x00);
+	
+	OLED_WriteCommand(0x40);	//设置显示开始行
+	
+	OLED_WriteCommand(0xA1);	//设置左右方向，0xA1正常 0xA0左右反置
+	
+	OLED_WriteCommand(0xC8);	//设置上下方向，0xC8正常 0xC0上下反置
+
+	OLED_WriteCommand(0xDA);	//设置COM引脚硬件配置
+	OLED_WriteCommand(0x12);
+	
+	OLED_WriteCommand(0x81);	//设置对比度控制
+	OLED_WriteCommand(0xCF);
+
+	OLED_WriteCommand(0xD9);	//设置预充电周期
+	OLED_WriteCommand(0xF1);
+
+	OLED_WriteCommand(0xDB);	//设置VCOMH取消选择级别
+	OLED_WriteCommand(0x30);
+
+	OLED_WriteCommand(0xA4);	//设置整个显示打开/关闭
+
+	OLED_WriteCommand(0xA6);	//设置正常/倒转显示
+
+	OLED_WriteCommand(0x8D);	//设置充电泵
+	OLED_WriteCommand(0x14);
+
+	OLED_WriteCommand(0xAF);	//开启显示
+		
+	OLED_Clear();				//OLED清屏
+}
+
+// 来自 6-6/Hardware/OLED.c  ·  OLED_Init()  ·  本次改动 56 行
+/**
+  * @brief  OLED初始化
+  * @param  无
+  * @retval 无
+  */
+void OLED_Init(void)
+{
+	uint32_t i, j;
+	
+	for (i = 0; i < 1000; i++)			//上电延时
+	{
+		for (j = 0; j < 1000; j++);
+	}
+	
+	OLED_I2C_Init();			//端口初始化
+	
+	OLED_WriteCommand(0xAE);	//关闭显示
+	
+	OLED_WriteCommand(0xD5);	//设置显示时钟分频比/振荡器频率
+	OLED_WriteCommand(0x80);
+	
+	OLED_WriteCommand(0xA8);	//设置多路复用率
+	OLED_WriteCommand(0x3F);
+	
+	OLED_WriteCommand(0xD3);	//设置显示偏移
+	OLED_WriteCommand(0x00);
+	
+	OLED_WriteCommand(0x40);	//设置显示开始行
+	
+	OLED_WriteCommand(0xA1);	//设置左右方向，0xA1正常 0xA0左右反置
+	
+	OLED_WriteCommand(0xC8);	//设置上下方向，0xC8正常 0xC0上下反置
+
+	OLED_WriteCommand(0xDA);	//设置COM引脚硬件配置
+	OLED_WriteCommand(0x12);
+	
+	OLED_WriteCommand(0x81);	//设置对比度控制
+	OLED_WriteCommand(0xCF);
+
+	OLED_WriteCommand(0xD9);	//设置预充电周期
+	OLED_WriteCommand(0xF1);
+
+	OLED_WriteCommand(0xDB);	//设置VCOMH取消选择级别
+	OLED_WriteCommand(0x30);
+
+	OLED_WriteCommand(0xA4);	//设置整个显示打开/关闭
+
+	OLED_WriteCommand(0xA6);	//设置正常/倒转显示
+
+	OLED_WriteCommand(0x8D);	//设置充电泵
+	OLED_WriteCommand(0x14);
+
+	OLED_WriteCommand(0xAF);	//开启显示
+		
+	OLED_Clear();				//OLED清屏
+}
+
+// 来自 6-5/System/Timer.c  ·  Timer_Init()  ·  本次改动 37 行
+void Timer_Init(void)
+{
+    RCC_APB1PeriphClockCmd (RCC_APB1Periph_TIM2,ENABLE);
+    
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA,ENABLE);
+    GPIO_InitTypeDef GPIO_InitStructure;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    
+    GPIO_Init (GPIOA, &GPIO_InitStructure);
+    
+    TIM_ETRClockMode2Config(TIM2,TIM_ExtTRGPSC_OFF, TIM_ExtTRGPolarity_NonInverted, 0X0f); 
+    
+    TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruture;
+    TIM_TimeBaseInitStruture.TIM_ClockDivision = TIM_CKD_DIV1;
+    TIM_TimeBaseInitStruture.TIM_CounterMode = TIM_CounterMode_Up;
+    TIM_TimeBaseInitStruture.TIM_Period = 10 - 1;
+    TIM_TimeBaseInitStruture.TIM_Prescaler = 1 - 1;
+    TIM_TimeBaseInitStruture.TIM_RepetitionCounter = 0;
+    TIM_TimeBaseInit (TIM2,&TIM_TimeBaseInitStruture);
+    
+    TIM_ClearFlag (TIM2,TIM_FLAG_Update );//为了避免复位
+    //从1开始计数使用一个清楚的操作来完成这个
+    TIM_ITConfig (TIM2, TIM_IT_Update ,ENABLE);
+    
+    NVIC_PriorityGroupConfig (NVIC_PriorityGroup_2);
+    
+    NVIC_InitTypeDef NVIC_InitStructure;
+    NVIC_InitStructure.NVIC_IRQChannel = TIM2_IRQn;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 2;
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
+    NVIC_Init(&NVIC_InitStructure);
+    
+    TIM_Cmd(TIM2,ENABLE);
+}
+```
+
+### ② 新建 / 修改的 .C 和 .H 文件
+- 6-6\Hardware\PWM.c   [06-16 13:09]
+- 6-6\user\main.c   [06-15 16:54]
+- 6-6\Hardware\PWM.h   [06-15 16:42]
+- 6-5\System\Timer.c   [06-13 20:37]
+- 6-6\System\Timer.c   [06-13 20:37]
+- 6-5\user\main.c   [06-13 20:36]
+- 6- 4定时器的etr引脚时钟，外部的\System\Timer.c   [06-12 21:20]
+- 6- 4定时器的etr引脚时钟，外部的\System\Timer.h   [06-12 21:03]
+- 6-5\System\Timer.h   [06-12 21:03]
+- 6-6\System\Timer.h   [06-12 21:03]
+- 6- 4定时器的etr引脚时钟，外部的\user\main.c   [06-12 21:01]
+- 6-3 定时器的外部时钟\Hardware\OLED.c   [06-12 20:59]
+- 6-2 TIM的应用\System\Timer.c   [06-12 17:17]
+- 6-3 定时器的外部时钟\System\Timer.c   [06-12 17:17]
+- 6-2 TIM的应用\user\main.c   [06-12 17:16]
+- 6-3 定时器的外部时钟\user\main.c   [06-12 17:16]
+- 6-2 TIM的应用\System\Timer.h   [06-12 17:01]
+- 6-3 定时器的外部时钟\System\Timer.h   [06-12 17:01]
+- 3-33\user\stm32f10x_it.c   [06-12 15:53]
+- 3-33\user\stm32f10x_it.h   [06-12 15:53]
+- 3-33\user\stm32f10x_conf.h   [06-12 15:53]
+- 3-33\user\main.c   [06-12 15:53]
+- 3-33\System\Delay.c   [06-12 15:53]
+- 3-33\System\Delay.h   [06-12 15:53]
+- 3-33\Hardware\Led.c   [06-12 15:53]
+- 3-33\Hardware\Led.h   [06-12 15:53]
+- 3-33\Hardware\Buzzer.h   [06-12 15:53]
+- 3-33\Hardware\KEY.c   [06-12 15:53]
+- 3-33\Hardware\Key.h   [06-12 15:53]
+- 3-33\Hardware\Buzzer.c   [06-12 15:53]
+- 6- 4定时器的etr引脚时钟，外部的\System\Time.c   [06-12 14:31]
+- 6-2 TIM的应用\System\Time.c   [06-12 14:31]
+- 6-3 定时器的外部时钟\System\Time.c   [06-12 14:31]
+- 6-5\System\Time.c   [06-12 14:31]
+- 6-6\System\Time.c   [06-12 14:31]
+- 6- 4定时器的etr引脚时钟，外部的\System\Time.h   [06-11 21:54]
+- 6-2 TIM的应用\System\Time.h   [06-11 21:54]
+- 6-3 定时器的外部时钟\System\Time.h   [06-11 21:54]
+- 6-5\System\Time.h   [06-11 21:54]
+- 6-6\System\Time.h   [06-11 21:54]
+- 5-2 EXTI中断的引进\Hardware\CountSensor.c   [06-11 20:38]
+- 5-2 EXTI中断的引进\Hardware\CountSensor.h   [06-11 19:39]
+- 5-2 EXTI中断的引进\user\main.c   [06-11 18:29]
+
+📊 代码量统计: 43 个文件, 共 1371 行
+
+### ③ AI 总结
+根据你提供的代码片段和描述，这段代码主要功能是解析 C 语言源码文件，并找出改动较大的函数。它通过解析 `git diff` 输出来确定哪些文件被修改了，并进一步分析这些文件的内容以找到改动最大的函数。
+
+### 主要逻辑总结
+
+1. **解析 C 函数定义**：通过识别花括号 `{}` 来定位函数定义。
+2. **查找函数名**：从函数签名前的代码中提取函数名，忽略控制语句如 `if`, `for` 等。
+3. **分析改动文件**：通过 `git diff` 输出来确定哪些文件被修改了，并进一步分析这些文件的内容以找到改动最大的函数。
+4. **返回结果**：返回一个列表，包含每个改动较大的函数的文件路径、函数名、改动行数和函数体内容。
+
+### 使用场景
+
+- 这段代码可以用于版本控制系统（如 Git）中，帮助开发者快速定位到哪些 C 语言源码文件被修改，并且这些修改主要集中在哪些函数上。
+- 可以作为静态代码分析的一部分，帮助识别出可能需要关注或优化的函数。
+
+### 示例使用
+
+假设你有一个项目目录 `/path/to/project`，你可以运行以下命令来获取改动较大的函数信息：
+
+```bash
+python script.py /path/to/project
+```
+
+这将输出一个列表，包含每个改动较大的函数的信息。例如：
+
+```json
+[
+    {
+        "file": "/path/to/source/file1.c",
+        "name": "func_name1",
+        "changed": 50,
+        "body": "function_body1\n// more code"
+    },
+    {
+        "file": "/path/to/include/file2.h",
+        "name": "func_name2",
+        "changed": 30,
+        "body": "function_body2\n// more code"
+    }
+]
+```
+
+### 注意事项
+
+- 这段代码依赖于 `git diff` 的输出，确保你的项目目录是一个 Git 仓库。
+- 对于非常大的文件或改动量较大的函数，可能需要调整 `max_body` 参数来控制返回的函数体内容长度。
+
+希望这段解释对你有所帮助！如果有更多具体问题，请随时提问。
+
+---
